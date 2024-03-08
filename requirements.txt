@@ -1,2 +1,4 @@
 aiortc
 opencv-python
+aiohttp
+aiortc

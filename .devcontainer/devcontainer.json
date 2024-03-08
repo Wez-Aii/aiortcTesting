@@ -16,8 +16,10 @@
         "--network",
         "host"
     ],
+    "privileged": true,
     "workspaceFolder": "/workspace",
     "workspaceMount": "source=/home/wezaii/Development/PreDevTesting/aiortcTesting,target=/workspace,type=bind",
     // "postStartCommand": "tail -f /dev/null",
-    "postCreateCommand": "pip3 install -r /workspace/requirements.txt"
+    "postCreateCommand": "pip3 install -r /workspace/requirements.txt",
+    "postStartCommand": "apt-get update && apt-get install ffmpeg libsm6 libxext6 -y"
 }
