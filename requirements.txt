@@ -2,3 +2,4 @@ aiortc
 opencv-python
 aiohttp
 aiortc
+requests

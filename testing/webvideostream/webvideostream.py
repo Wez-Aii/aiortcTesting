@@ -21,6 +21,7 @@ from aiortc.contrib.media import MediaBlackhole, MediaPlayer, MediaRecorder, Med
 from aiortc.contrib.signaling import BYE, add_signaling_arguments, create_signaling
 from aiortc.rtcrtpsender import RTCRtpSender
 from av import VideoFrame
+import requests
 
 
 ROOT = os.path.dirname(__file__)
@@ -145,8 +146,78 @@ def force_codec(pc, sender, forced_codec):
 
 
 async def index(request):
-    content = open(os.path.join(ROOT, "index.html"), "r").read()
-    return web.Response(content_type="text/html", text=content)
+    # content = open(os.path.join(ROOT, "index.html"), "r").read()
+    # return web.Response(content_type="text/html", text=content)
+    # config = {
+    #     "sdpSemantics": "unified-plan",
+    #     "iceServers" : [{ "urls": ['stun:stun.l.google.com:19302'] }]
+    # }
+    # config = RTCConfiguration(
+    #     iceServers=[
+    #         RTCIceServer(urls=['stun:stun.l.google.com:19302'])
+    #         ]
+    # )
+
+    # pc = RTCPeerConnection(config)
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+
+    while True:
+        try:
+            url = "http://192.168.1.26:8080/offer"
+            response = requests.get(url=url)
+            if response.status_code == 200:
+                _json = response.json()
+                offer = RTCSessionDescription(sdp=_json.get("sdp"),type=_json.get("type"))
+                break
+        except Exception as e:
+            pass
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        print("Connection state is %s" % pc.connectionState)
+        if pc.connectionState == "failed":
+            await pc.close()
+            pcs.discard(pc)
+
+    # open media source
+    # audio, video = create_local_tracks(
+    #     None, None
+    # )
+
+    # if audio:
+    #     audio_sender = pc.addTrack(audio)
+    #     # if args.audio_codec:
+    #     #     force_codec(pc, audio_sender, args.audio_codec)
+    #     # elif args.play_without_decoding:
+    #     #     raise Exception("You must specify the audio codec using --audio-codec")
+
+    # if video:
+    #     video_sender = pc.addTrack(video)
+    #     force_codec(pc, video_sender, "video/hh")
+    #     # if args.video_codec:
+    #     #     force_codec(pc, video_sender, args.video_codec)
+    #     # elif args.play_without_decoding:
+    #     #     raise Exception("You must specify the video codec using --video-codec")
+
+    pc.addTrack(FlagVideoStreamTrack)
+    await pc.setRemoteDescription(offer)
+
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    # await wait_for_ice_gathering_complete(pc)
+
+    url = "http://192.168.1.26:8080/stream"
+    data = json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
+    headers = {'Content-Type': 'application/json'}
+    response = requests.post(url, data=data, headers=headers)
+    await asyncio.sleep(1)
+    print("slept")
+
+    return web.Response(
+        text="ok",
+    )
+
 
 
 async def javascript(request):
