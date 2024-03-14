@@ -4,6 +4,8 @@ import json
 import logging
 import math
 import os
+import platform
+import threading
 
 import cv2
 import numpy
@@ -26,6 +28,7 @@ ROOT = os.path.dirname(__file__)
 
 relay = None
 webcam = None
+Cap = None
 
 
 class FlagVideoStreamTrack(VideoStreamTrack):
@@ -87,19 +90,63 @@ class FlagVideoStreamTrack(VideoStreamTrack):
         data_bgr[:, :] = color
         return data_bgr
 
-def create_local_tracks(play_from, decode):
-    global relay, webcam
+class CV2VideoStreamTrack(VideoStreamTrack):
+    """
+    A video track that returns an animated flag.
+    """
 
-    if play_from:
-        player = MediaPlayer(play_from, decode=decode)
-        return player.audio, player.video
-    else:
+    def __init__(self):
+        super().__init__()  # don't forget this!
+
+        video_path = "/dev/video0"
+        self.video_path = video_path
+        self.cap = cv2.VideoCapture(video_path)
+
+    async def recv(self):
+        # Read frames from the video file and convert them to RTCVideoFrames
+        ret, img = self.cap.read()
+        if ret:
+            pts, time_base = await self.next_timestamp()
+            frame = VideoFrame.from_ndarray(img, format="bgr24")
+            frame.pts = pts
+            frame.time_base = time_base
+            await asyncio.sleep(1/30)
+            # cv2.putText(frame, 'Write By CV2', (50,50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0,255,255),2, cv2.LINE_4)
+            return frame
+        else:
+            # Video ended, close the connection
+            self.cap.release()
+            raise ConnectionError("Video stream ended")
+        
+def create_local_tracks(cap_type=None):
+    global relay, webcam, Cap
+
+    if cap_type is None:
         options = {"framerate": "30", "video_size": "640x480"}
         if relay is None:
-            webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
+            if platform.system() == "Darwin":
+                webcam = MediaPlayer(
+                    "default:none", format="avfoundation", options=options
+                )
+            elif platform.system() == "Windows":
+                webcam = MediaPlayer(
+                    "video=Integrated Camera", format="dshow", options=options
+                )
+            else:
+                webcam = MediaPlayer("/dev/video0", format="v4l2", options=options)
             relay = MediaRelay()
         return None, relay.subscribe(webcam.video)
-        # return None, relay.subscribe(FlagVideoStreamTrack)
+        # return None, relay.subscribe(FlagVideoStreamTrack())
+    elif cap_type == "cv2":
+        if relay is None:
+            relay = MediaRelay()
+        if Cap is None:
+            Cap = CV2VideoStreamTrack()
+        return None, relay.subscribe(Cap)
+        # return None, relay.subscribe(FlagVideoStreamTrack())
+    else:
+        print(f"capture type({cap_type} does not available.)")
+        return None, None
 
 def force_codec(pc, sender, forced_codec):
     kind = forced_codec.split("/")[0]
@@ -120,27 +167,107 @@ async def wait_for_ice_gathering_complete(pc):
     
     await check_state()
 
+async def liveView():
+    global Cap
+    keep_looping = threading.Event()
+    keep_looping.set()
+    while keep_looping.is_set():
+        try:
+            url = "http://localhost:8888/offer"
+            # url = "https://test.api.longansorter.aiindustries.co/offer"
+            response = requests.get(url=url)
+            if response.status_code == 200:
+                _json = json.loads(response.text)
+                offer = RTCSessionDescription(sdp=_json.get("sdp"),type=_json.get("type"))
+
+                config = RTCConfiguration(
+                    iceServers=[
+                        RTCIceServer(urls=['stun:stun.l.google.com:19302'])
+                        ]
+                )
+
+                pc = RTCPeerConnection(config)
+                # pc = RTCPeerConnection()
+
+                # pcs.add(pc)
+
+                @pc.on("connectionstatechange")
+                async def on_connectionstatechange():
+                    print("Connection state is %s" % pc.connectionState)
+                    if pc.connectionState in ["failed", "closed"]:
+                        await pc.close()
+                        pcs.discard(pc)
+
+                # open media source
+                audio, video = create_local_tracks(cap_type="cv2") # default=None (for Platform Video)
+                # audio, video = create_local_tracks()
+
+                if audio:
+                    audio_sender = pc.addTrack(audio)
+                    # if args.audio_codec:
+                    #     force_codec(pc, audio_sender, args.audio_codec)
+                    # elif args.play_without_decoding:
+                    #     raise Exception("You must specify the audio codec using --audio-codec")
+
+                if video:
+                    video_sender = pc.addTrack(video)
+                    force_codec(pc, video_sender, "video/hh")
+                    # if args.video_codec:
+                    #     force_codec(pc, video_sender, args.video_codec)
+                    # elif args.play_without_decoding:
+                    #     raise Exception("You must specify the video codec using --video-codec")
+
+                # pc.addTrack(FlagVideoStreamTrack)
+                await pc.setRemoteDescription(offer)
+
+                answer = await pc.createAnswer()
+                await pc.setLocalDescription(answer)
+                await wait_for_ice_gathering_complete(pc)
+                
+                url = "http://localhost:8888/stream"
+                # url = "https://test.api.longansorter.aiindustries.co/stream"
+                data = json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
+                headers = {'Content-Type': 'application/json'}
+                response = requests.post(url, data=data, headers=headers)
+                
+                pcs.add(pc)
+                await asyncio.sleep(3)
+            else:
+                await asyncio.sleep(3)
+                if (len(pcs) == 0) and Cap is not None:
+                    Cap.cap.release()
+                    Cap = None
+                if (len(pcs) == 0):
+                    # keep_looping.clear()
+                    pass
+
+        except Exception as e:
+            print("error -",e)
+            await asyncio.sleep(3)
+            pass
+
 async def run(role):
     # config = {
     #     "sdpSemantics": "unified-plan",
     #     "iceServers" : [{ "urls": ['stun:stun.l.google.com:19302'] }]
     # }
-    # config = RTCConfiguration(
-    #     iceServers=[
-    #         RTCIceServer(urls=['stun:stun.l.google.com:19302'])
-    #         ]
-    # )
+    config = RTCConfiguration(
+        iceServers=[
+            RTCIceServer(urls=['stun:stun.l.google.com:19302'])
+            ]
+    )
 
-    # pc = RTCPeerConnection(config)
-    pc = RTCPeerConnection()
+    pc = RTCPeerConnection(config)
+    # pc = RTCPeerConnection()
     pcs.add(pc)
 
     while True:
         try:
-            url = "http://192.168.1.26:8080/offer"
+            url = "http://localhost:8888/offer"
+            # url = "https://test.api.longansorter.aiindustries.co/offer"
             response = requests.get(url=url)
             if response.status_code == 200:
-                _json = response.json()
+                _json = json.loads(response.text)
                 offer = RTCSessionDescription(sdp=_json.get("sdp"),type=_json.get("type"))
                 break
         except Exception as e:
@@ -154,9 +281,7 @@ async def run(role):
             pcs.discard(pc)
 
     # open media source
-    audio, video = create_local_tracks(
-        None, None
-    )
+    audio, video = create_local_tracks(cap_type="cv2") # default=None (for Platform Video)
 
     if audio:
         audio_sender = pc.addTrack(audio)
@@ -180,7 +305,8 @@ async def run(role):
     await pc.setLocalDescription(answer)
     await wait_for_ice_gathering_complete(pc)
 
-    url = "http://192.168.1.26:8080/stream"
+    url = "http://localhost:8888/stream"
+    # url = "https://test.api.longansorter.aiindustries.co/stream"
     data = json.dumps({"sdp": pc.localDescription.sdp, "type": pc.localDescription.type})
     headers = {'Content-Type': 'application/json'}
     response = requests.post(url, data=data, headers=headers)
@@ -230,9 +356,10 @@ if __name__ == "__main__":
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(
-            run(
-                role="offer",
-            )
+            # run(
+            #     role="offer",
+            # )
+            liveView()
         )
     except KeyboardInterrupt:
         pass
