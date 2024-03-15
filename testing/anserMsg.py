@@ -140,8 +140,10 @@ def create_local_tracks(cap_type=None):
     elif cap_type == "cv2":
         if relay is None:
             relay = MediaRelay()
-        if Cap is None:
             Cap = CV2VideoStreamTrack()
+        # if Cap is None:
+        #     Cap = CV2VideoStreamTrack()
+        
         return None, relay.subscribe(Cap)
         # return None, relay.subscribe(FlagVideoStreamTrack())
     else:
@@ -168,10 +170,10 @@ async def wait_for_ice_gathering_complete(pc):
     await check_state()
 
 async def liveView():
-    global Cap
-    keep_looping = threading.Event()
-    keep_looping.set()
-    while keep_looping.is_set():
+    global Cap, offers, answer_pcs
+    # keep_looping = threading.Event()
+    # keep_looping.set()
+    while True:
         try:
             url = "http://localhost:8888/offer"
             # url = "https://test.api.longansorter.aiindustries.co/offer"
@@ -189,18 +191,19 @@ async def liveView():
                 pc = RTCPeerConnection(config)
                 # pc = RTCPeerConnection()
 
-                # pcs.add(pc)
+                pcs.add(pc)
 
                 @pc.on("connectionstatechange")
                 async def on_connectionstatechange():
                     print("Connection state is %s" % pc.connectionState)
-                    if pc.connectionState in ["failed", "closed"]:
+                    if pc.connectionState == "failed":
+                    # if pc.connectionState in ["failed", "closed"]:
                         await pc.close()
-                        pcs.discard(pc)
+                        pcs.remove(pc)
 
                 # open media source
-                audio, video = create_local_tracks(cap_type="cv2") # default=None (for Platform Video)
-                # audio, video = create_local_tracks()
+                # audio, video = create_local_tracks(cap_type="cv2") # default=None (for Platform Video)
+                audio, video = create_local_tracks()
 
                 if audio:
                     audio_sender = pc.addTrack(audio)
@@ -230,10 +233,11 @@ async def liveView():
                 headers = {'Content-Type': 'application/json'}
                 response = requests.post(url, data=data, headers=headers)
                 
-                pcs.add(pc)
-                await asyncio.sleep(3)
+                # pcs.add(pc)
+
+                # await asyncio.sleep(1)
             else:
-                await asyncio.sleep(3)
+                await asyncio.sleep(1)
                 if (len(pcs) == 0) and Cap is not None:
                     Cap.cap.release()
                     Cap = None
@@ -322,6 +326,8 @@ async def infinate_loop():
         pass
 
 pcs = set()
+offers = []
+answer_pcs = []
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Video stream from the command line")
@@ -354,24 +360,26 @@ if __name__ == "__main__":
 
     # run event loop
     loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(
-            # run(
-            #     role="offer",
-            # )
-            liveView()
-        )
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # cleanup
-        # loop.run_until_complete(recorder.stop())
-        # loop.run_until_complete(signaling.close())
-        # loop.run_until_complete(pc.close())
-        # loop.run_until_complete(
-        #     run(
-        #         role="offer",
-        #     )
-        # )
-        # loop.run_until_complete(infinate_loop())
-        pass
+    loop.create_task(liveView())
+    loop.run_forever()
+    # try:
+    #     loop.run_until_complete(
+    #         # run(
+    #         #     role="offer",
+    #         # )
+    #         liveView()
+    #     )
+    # except KeyboardInterrupt:
+    #     pass
+    # finally:
+    #     # cleanup
+    #     # loop.run_until_complete(recorder.stop())
+    #     # loop.run_until_complete(signaling.close())
+    #     # loop.run_until_complete(pc.close())
+    #     # loop.run_until_complete(
+    #     #     run(
+    #     #         role="offer",
+    #     #     )
+    #     # )
+    #     # loop.run_until_complete(infinate_loop())
+    #     pass
