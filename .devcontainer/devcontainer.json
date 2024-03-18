@@ -1,5 +1,6 @@
 {
     "name": "aiortcTesting-py3",
+    // "image": "aii-ubuntu:latest",
     "image": "python:3.9",
     // "shutdownAction": "none",
     "shutdownAction": "stopContainer",
